@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Install CertManager
         run: |
-          oc login -u ${{ secrets.USERNAME }} ${{ secrets.CLUSTER_API_URL }} --insecure-skip-tls-veriy=true
+          oc login -u ${{ secrets.USERNAME }} ${{ secrets.CLUSTER_API_URL }} --insecure-skip-tls-verify=true
           helm repo add jetstack https://charts.jetstack.io
           helm repo update
           helm install \
