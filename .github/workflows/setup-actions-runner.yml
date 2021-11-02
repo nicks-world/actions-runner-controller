@@ -1,5 +1,12 @@
 name: Install Actions Runner System
-
+on: 
+  push:
+    branches:
+      - master
+      - main
+    tags:        
+      - v*
+      
 jobs:
   deploy-certmanager:
     runs-on: ["cicd-infra", "build.mdw.nicks.world"]
