@@ -12,14 +12,19 @@ jobs:
     runs-on: ["cicd-infra", "build.mdw.nicks.world"]
     environment: dev
     steps:
-      - name: Install CertManager
+      - name: Login to {{ github.environment }}
         run: |
           oc login -u ${{ secrets.USERNAME }} -p ${{ secrets.PASSWORD }} ${{ secrets.CLUSTER_API_URL }} --insecure-skip-tls-verify=true
-          helm repo add jetstack https://charts.jetstack.io
-          helm repo update
-          helm install \
-          cert-manager jetstack/cert-manager \
-          --namespace cert-manager \
-          --create-namespace \
-          --version v1.6.0 \
-          --set installCRDs=true
+          
+      - name: Login to {{ github.environment }}
+        run: |
+          if [ helm status cert-manager  -n cert-2manager  -o json | jq '.info.status' == 'Error: release: not found') ]; then
+            helm repo add jetstack https://charts.jetstack.io
+            helm repo update
+            helm install \
+            cert-manager jetstack/cert-manager \
+            --namespace cert-manager \
+            --create-namespace \
+            --version v1.6.0 \
+            --set installCRDs=true
+          fi
