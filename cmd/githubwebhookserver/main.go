@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -27,6 +28,8 @@ import (
 
 	actionsv1alpha1 "github.com/actions-runner-controller/actions-runner-controller/api/v1alpha1"
 	"github.com/actions-runner-controller/actions-runner-controller/controllers"
+	"github.com/actions-runner-controller/actions-runner-controller/github"
+	"github.com/kelseyhightower/envconfig"
 	zaplib "go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -48,6 +51,8 @@ const (
 	logLevelInfo  = "info"
 	logLevelWarn  = "warn"
 	logLevelError = "error"
+
+	webhookSecretTokenEnvName = "GITHUB_WEBHOOK_SECRET_TOKEN"
 )
 
 func init() {
@@ -65,16 +70,26 @@ func main() {
 		metricsAddr string
 
 		// The secret token of the GitHub Webhook. See https://docs.github.com/en/developers/webhooks-and-events/securing-your-webhooks
-		webhookSecretToken string
+		webhookSecretToken    string
+		webhookSecretTokenEnv string
 
 		watchNamespace string
 
 		enableLeaderElection bool
 		syncPeriod           time.Duration
 		logLevel             string
+
+		ghClient *github.Client
 	)
 
-	webhookSecretToken = os.Getenv("GITHUB_WEBHOOK_SECRET_TOKEN")
+	var c github.Config
+	err = envconfig.Process("github", &c)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: processing environment variables: %v\n", err)
+		os.Exit(1)
+	}
+
+	webhookSecretTokenEnv = os.Getenv(webhookSecretTokenEnvName)
 
 	flag.StringVar(&webhookAddr, "webhook-addr", ":8000", "The address the metric endpoint binds to.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
@@ -83,10 +98,26 @@ func main() {
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.DurationVar(&syncPeriod, "sync-period", 10*time.Minute, "Determines the minimum frequency at which K8s resources managed by this controller are reconciled. When you use autoscaling, set to a lower value like 10 minute, because this corresponds to the minimum time to react on demand change")
 	flag.StringVar(&logLevel, "log-level", logLevelDebug, `The verbosity of the logging. Valid values are "debug", "info", "warn", "error". Defaults to "debug".`)
+	flag.StringVar(&webhookSecretToken, "github-webhook-secret-token", "", "The personal access token of GitHub.")
+	flag.StringVar(&c.Token, "github-token", c.Token, "The personal access token of GitHub.")
+	flag.Int64Var(&c.AppID, "github-app-id", c.AppID, "The application ID of GitHub App.")
+	flag.Int64Var(&c.AppInstallationID, "github-app-installation-id", c.AppInstallationID, "The installation ID of GitHub App.")
+	flag.StringVar(&c.AppPrivateKey, "github-app-private-key", c.AppPrivateKey, "The path of a private key file to authenticate as a GitHub App")
+	flag.StringVar(&c.URL, "github-url", c.URL, "GitHub URL to be used for GitHub API calls")
+	flag.StringVar(&c.UploadURL, "github-upload-url", c.UploadURL, "GitHub Upload URL to be used for GitHub API calls")
+	flag.StringVar(&c.BasicauthUsername, "github-basicauth-username", c.BasicauthUsername, "Username for GitHub basic auth to use instead of PAT or GitHub APP in case it's running behind a proxy API")
+	flag.StringVar(&c.BasicauthPassword, "github-basicauth-password", c.BasicauthPassword, "Password for GitHub basic auth to use instead of PAT or GitHub APP in case it's running behind a proxy API")
+	flag.StringVar(&c.RunnerGitHubURL, "runner-github-url", c.RunnerGitHubURL, "GitHub URL to be used by runners during registration")
+
 	flag.Parse()
 
+	if webhookSecretToken == "" && webhookSecretTokenEnv != "" {
+		setupLog.Info(fmt.Sprintf("Using the value from %s for -github-webhook-secret-token", webhookSecretTokenEnvName))
+		webhookSecretToken = webhookSecretTokenEnv
+	}
+
 	if webhookSecretToken == "" {
-		setupLog.Info("-webhook-secret-token is missing or empty. Create one following https://docs.github.com/en/developers/webhooks-and-events/securing-your-webhooks")
+		setupLog.Info(fmt.Sprintf("-github-webhook-secret-token and %s are missing or empty. Create one following https://docs.github.com/en/developers/webhooks-and-events/securing-your-webhooks and specify it via the flag or the envvar", webhookSecretTokenEnvName))
 	}
 
 	if watchNamespace == "" {
@@ -111,6 +142,15 @@ func main() {
 		}
 	})
 
+	if len(c.Token) > 0 || (c.AppID > 0 && c.AppInstallationID > 0 && c.AppPrivateKey != "") || (len(c.BasicauthUsername) > 0 && len(c.BasicauthPassword) > 0) {
+		ghClient, err = c.NewClient()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: Client creation failed.", err)
+			setupLog.Error(err, "unable to create controller", "controller", "Runner")
+			os.Exit(1)
+		}
+	}
+
 	ctrl.SetLogger(logger)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -133,6 +173,7 @@ func main() {
 		Scheme:         mgr.GetScheme(),
 		SecretKeyBytes: []byte(webhookSecretToken),
 		Namespace:      watchNamespace,
+		GitHubClient:   ghClient,
 	}
 
 	if err = hraGitHubWebhook.SetupWithManager(mgr); err != nil {

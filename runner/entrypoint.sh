@@ -24,6 +24,13 @@ if [ ! -z "${STARTUP_DELAY_IN_SECONDS}" ]; then
   sleep ${STARTUP_DELAY_IN_SECONDS}
 fi
 
+if [[ "${DISABLE_WAIT_FOR_DOCKER}" != "true" ]] && [[ "${DOCKER_ENABLED}" == "true" ]]; then
+    log "Docker enabled runner detected and Docker daemon wait is enabled"
+    log "Waiting until Docker is avaliable or the timeout is reached"
+    timeout 120s bash -c 'until docker ps ;do sleep 1; done'
+else
+  log "Docker wait check skipped. Either Docker is disabled or the wait is disabled, continuing with entrypoint"
+fi
 
 if [ -z "${GITHUB_URL}" ]; then
   log "Working with public GitHub"
@@ -72,7 +79,8 @@ fi
 # if this is not a testing environment
 if [ -z "${UNITTEST:-}" ]; then
   sudo chown -R runner:docker ${RUNNER_HOME}
-  mv /runnertmp/* ${RUNNER_HOME}/
+  # use cp over mv to avoid issues when /runnertmp and {RUNNER_HOME} are on different devices
+  cp -r /runnertmp/* ${RUNNER_HOME}/
 fi
 
 cd ${RUNNER_HOME}
